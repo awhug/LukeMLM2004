@@ -30,7 +30,9 @@ Need to calculate the voting percentage to achieve same dependent variable as Lu
 
 ```{r tidy dataset, warning=FALSE,message=FALSE}
 library(tidyverse)
-#Load tobvote from data file
+load("../Data/tobvote.rda")
+
+# Load tobvote from data file
 tobacco <- tobvote %>% 
   select(lastname, firstnam, state, house, pactotal, party, votedpro, votenum, acres) %>% #extract variables of interest
   group_by(state, lastname, house)%>% #Arrange in state and last name order
@@ -53,15 +55,19 @@ Note there is a discrepancy here - the text had $N = 527$. We appear to be missi
 ##Figure 2.2 "Average Pro-Tobacco Vote Percentage by Congress Members - 1997 to 2000"
 
 ```{r fifty state map, warning=FALSE,message=FALSE,error=FALSE}
-##Need to install package for Alaska and Hawaii
-#install.packages("devtools")
-#devtools::install_github("wmurphyrd/fiftystater")
-require("fiftystater")
-vote.by.state <- tobacco %>% group_by(state) %>% 
+# Need to install "fiftystater" package for Alaska and Hawaii
+if(!require(fiftystater)){
+  if(!require(devtools)){install.packages("devtools")}
+  else devtools::install_github("wmurphyrd/fiftystater");
+  install.packages("mapproj")}
+library("fiftystater")
+library("mapproj")
+
+vote_by_state <- tobacco %>% group_by(state) %>% 
   summarise(Avg = mean(VotePct)) %>% 
   mutate(statename = tolower(state.name[match(state, state.abb)]))
 
-state.plot <- ggplot(vote.by.state, aes(map_id = statename)) + 
+state_plot <- ggplot(vote_by_state, aes(map_id = statename)) + 
   # map points to the fifty_states shape data
   geom_map(aes(fill = Avg), map = fifty_states)+ 
   expand_limits(x = fifty_states$long, y = fifty_states$lat) +
@@ -73,7 +79,7 @@ state.plot <- ggplot(vote.by.state, aes(map_id = statename)) +
   labs(x = "", y = "") +
   theme(legend.position = "bottom", 
         panel.background = element_blank()) 
-state.plot
+state_plot
 ```
 
 Alaska and Hawaii labels don't play nice. Will come back to this. Otherwise the visualisations are roughly accurate to the text.
@@ -82,12 +88,12 @@ https://cran.r-project.org/web/packages/fiftystater/vignettes/fiftystater.html
 ##Figure 2.3 "Relationship of Money and Voting % for 5 Large States"
 
 ```{r 5 state money vote, warning=FALSE,message=FALSE,error=FALSE}
-five.states.plot <- tobacco %>% 
+five_states_plot <- tobacco %>% 
   filter(state == "CA" |state ==  "FL" |state ==  "IL" |state ==  "NY" |state ==  "TX") %>% 
   ggplot(aes(x = pactotal, y = VotePct, shape = state, linetype = state)) + 
     geom_point() + ylim(0,1) + xlim(0,80) + labs(x = "PAC Contributions ($K)", y = "Pro-Tobacco Voting (%)") +
     stat_smooth(method = "lm", se =FALSE, fullrange = T, color = "black", size=.3) + theme_classic() 
-five.states.plot
+five_states_plot
 ```
 
 Graph mirrors that of the book very closely.
@@ -96,12 +102,15 @@ Graph mirrors that of the book very closely.
 
 ```{r OLS fits for all states}
 #This may take some time to run
-ols.states.plot <- ggplot(tobacco, aes(x = pactotal, y = VotePct)) + geom_point(shape=1, size =.5) +
-  ylim(0,1) + xlim(0,100) +
+ols_states_plot <- ggplot(tobacco, aes(x = pactotal, y = VotePct)) + 
+  geom_point(shape = 1, size = 2, alpha = .8) +
   stat_smooth(method = "lm", se =FALSE, fullrange = T, color = "black", size=.3) + 
-  facet_wrap( ~ state) + theme_classic() +
-  labs(x = "PAC Money", y = "Vote %")
-ols.states.plot
+  facet_wrap( ~ state) + theme_bw() + 
+  theme(panel.spacing = unit(0, "lines"), 
+        panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  labs(x = "PAC Money", y = "Vote %") +
+  ylim(0,1) + xlim(0,100) 
+ols_states_plot
 ```
 
 Aesthetics aren't exactly the same, but OLS fits are more or less identical and now in alphabetical order. Slopes and intercepts clearly vary by state.
@@ -115,8 +124,8 @@ This is implemented in lme4, rather than nmle. Slight differences in estimation 
 ```{r Null Model, warning=FALSE,error=FALSE,message=FALSE}
 library(lme4)
 library(lmerTest)
-null.fit <- lmer(VotePct ~ 1 + (1 | state), tobacco, REML = F)
-summary(null.fit)
+null_fit <- lmer(VotePct ~ 1 + (1 | state), tobacco, REML = F)
+summary(null_fit)
 ```
 
 Model fits differ somewhat, but result is extremely close.
@@ -124,8 +133,8 @@ Model fits differ somewhat, but result is extremely close.
 ##Table 2.7 "Partial R Output for Model 1"
 
 ```{r Model 1, warning=FALSE,error=FALSE,message=FALSE}
-model1.fit <- lmer(VotePct ~ 1+ pactotal + party + (pactotal + party | state), tobacco, REML = F)
-summary(model1.fit)
+model1_fit <- lmer(VotePct ~ 1+ pactotal + party + (pactotal + party | state), tobacco, REML = F)
+summary(model1_fit)
 ```
 
 Results are similar.
@@ -133,8 +142,8 @@ Results are similar.
 ##Table 2.9a "Parameter Estimates and Model Fit for Three Models"
 
 ```{r Model 2, warning=FALSE,error=FALSE,message=FALSE}
-model2.fit <- lmer(VotePct ~ 1 + pactotal + party + acres + (pactotal + party | state), tobacco, REML = F)
-summary(model2.fit)
+model2_fit <- lmer(VotePct ~ 1 + pactotal + party + acres + (pactotal + party | state), tobacco, REML = F)
+summary(model2_fit)
 ```
 
 Fixed effects estimates and variance components are roughly similar. lmerTest provides significance tests for the former, which resemble published results, with the exception of 'acres' variable which is here non-significant. Neither lmerTest nor lme4 provide significance tests for variance components.
@@ -144,8 +153,8 @@ Difficult to say why differences emerge - may be due to software (HLM providing 
 ##Table 2.9b "Parameter Estimates and Model Fit for Three Models"
 
 ```{r Model 3, warning=FALSE,error=FALSE,message=FALSE}
-model3.fit <- lmer(VotePct ~ 1 + pactotal + party + acres + pactotal*acres + party*acres + (pactotal + party | state), tobacco, REML = F)
-summary(model3.fit)
+model3_fit <- lmer(VotePct ~ 1 + pactotal + party + acres + pactotal*acres + party*acres + (pactotal + party | state), tobacco, REML = F)
+summary(model3_fit)
 ```
 
 Again, t-value and significance levels differ from published results. Unclear why this may be, although lme4 provides a warning about rescaling the variable (acres ranges from many observations of zero to >1,000).
@@ -167,10 +176,10 @@ Currently not implemented - still need to determine how cut-offs between no acre
 ##Figure 2.6 "Boxplots of Within-State residuals for Model 3"
 
 ```{r Residual Plot}
-residual.plot <- ggplot(model3.fit, aes(y = residuals(model3.fit), x = reorder(state, desc(state)))) +
+residual_plot <- ggplot(model3_fit, aes(y = residuals(model3_fit), x = reorder(state, desc(state)))) +
   geom_boxplot(outlier.shape = 1, size = .4) + coord_flip() + geom_hline(yintercept = 0) +
   theme_classic() + labs(x = "State", y = "Residuals")
-residual.plot
+residual_plot
 ```
 
 Now in alphabetical order. Visualisation is approximately the same.
@@ -178,11 +187,13 @@ Now in alphabetical order. Visualisation is approximately the same.
 ##Figure 2.7 "Scatterplot of Standardised Residuals by Fitted Values for Model 3 by Party"
 
 ```{r Standardised Residual Plot}
-std.residual.plot <- ggplot(model3.fit, aes(.fitted, .resid)) + geom_point(shape = 1) +
-  facet_wrap(~ party) + theme_bw() + theme(panel.grid.minor = element_blank()) +
+std_residual_plot <- ggplot(model3_fit, aes(.fitted, .resid)) + 
+  geom_point(shape = 1) +
+  facet_wrap(~ party) + 
+  theme_bw() + theme(panel.grid.minor = element_blank()) +
   geom_text(aes(label=ifelse(.resid>0.5 | .resid <=-0.5,as.character(state),'')),hjust=0,vjust=0) +
   labs(x="Fitted Values",y="Standardised Values")
-std.residual.plot
+std_residual_plot
 ```
 
 Visualisation is approximately the same.
@@ -190,11 +201,36 @@ Visualisation is approximately the same.
 ##Figure 2.8 "Normal QQ-Plot of Residuals of Model 3 by Party"
 
 ```{r}
-qplot.party <- ggplot(model3.fit, aes(sample = residuals(model3.fit, scaled = FALSE))) + 
+qplot_party <- ggplot(model3_fit, aes(sample = residuals(model3_fit, scaled = FALSE))) + 
   geom_point(stat = "qq", shape = 1) + coord_flip() + facet_wrap(~party) +
   theme_bw() + theme(panel.grid.minor = element_blank(), panel.grid.major = element_blank()) +
   labs(x="Quantiles of Standard Normal", y="Residuals")
-qplot.party
+qplot_party
 ```
 
 Visually similar, although some observations amongst democrats at the low quantiles appear further.
+
+##Figure 2.9 "Normal QQ-Plot of Random Effects of Model 3"
+
+```{r}
+nested_re <- as.data.frame(ranef(model3_fit))
+
+nested_re %>% 
+  ggplot(aes(sample = condval)) +
+  stat_qq(aes(group = 1), alpha = 0.5) +
+  coord_flip() + theme_bw() +
+  facet_wrap(~term,  scales = "free") +
+  labs(y = "Quantiles of Standard Normal", x = "Random Effects")
+```
+
+
+# Figure 2.10 "Scatterplot Matrix"
+
+```{r}
+nested_re %>% 
+  select(-condsd) %>% 
+  spread(term, condval, convert = TRUE) %>% 
+  pairs(~ `(Intercept)` + pactotal + partyRepublican, 
+                         data = .)
+```
+
