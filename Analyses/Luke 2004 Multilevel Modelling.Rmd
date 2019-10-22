@@ -35,8 +35,8 @@ load("../Data/tobvote.rda")
 # Load tobvote from data file
 tobacco <- tobvote %>% 
   select(lastname, firstnam, state, house, pactotal, party, votedpro, votenum, acres) %>% #extract variables of interest
-  group_by(state, lastname, house)%>% #Arrange in state and last name order
-  mutate(vote = (as.numeric(votedpro)-1), #covert voting behaviour to binary numeric data
+  group_by(state, lastname, firstnam, house)%>% #Arrange in state and last name order
+  mutate(vote = (as.numeric(votedpro)-1), #convert voting behaviour to binary numeric data
                    VotePct = round((sum(vote)/votenum),2)) %>% #calculate percentage of pro-tobacco votes
   select(-vote, -votedpro) %>% #remove nuisance variables
   unique() #reduce data frame to one row per representative
@@ -148,16 +148,20 @@ summary(model2_fit)
 
 Fixed effects estimates and variance components are roughly similar. lmerTest provides significance tests for the former, which resemble published results, with the exception of 'acres' variable which is here non-significant. Neither lmerTest nor lme4 provide significance tests for variance components.
 
-Difficult to say why differences emerge - may be due to software (HLM providing the published estimates?) implementing a different form of test. Need to double check this.
+Difficult to say why differences emerge - may be due to software implementing a different form of test. Need to double check this.
 
 ##Table 2.9b "Parameter Estimates and Model Fit for Three Models"
 
 ```{r Model 3, warning=FALSE,error=FALSE,message=FALSE}
-model3_fit <- lmer(VotePct ~ 1 + pactotal + party + acres + pactotal*acres + party*acres + (pactotal + party | state), tobacco, REML = F)
+options(scipen = 99)
+model3_fit <- lmer(VotePct ~ 1 + pactotal + party + acres + pactotal*acres + party*acres + (pactotal + party | state), 
+                   data = tobacco, REML = F)
 summary(model3_fit)
 ```
 
 Again, t-value and significance levels differ from published results. Unclear why this may be, although lme4 provides a warning about rescaling the variable (acres ranges from many observations of zero to >1,000).
+
+
 
 #More Visualisations
 
@@ -210,27 +214,173 @@ qplot_party
 
 Visually similar, although some observations amongst democrats at the low quantiles appear further.
 
-##Figure 2.9 "Normal QQ-Plot of Random Effects of Model 3"
+## Figure 2.9 "Normal QQ-Plot of Random Effects of Model 3"
 
 ```{r}
-nested_re <- as.data.frame(ranef(model3_fit))
+random_effects <- as.data.frame(ranef(model3_fit))
 
-nested_re %>% 
+qplot_re <- random_effects %>% 
   ggplot(aes(sample = condval)) +
   stat_qq(aes(group = 1), alpha = 0.5) +
   coord_flip() + theme_bw() +
   facet_wrap(~term,  scales = "free") +
-  labs(y = "Quantiles of Standard Normal", x = "Random Effects")
+  labs(x = "Quantiles of Standard Normal", y = "Random Effects")
+
+qplot_re
 ```
 
 
 # Figure 2.10 "Scatterplot Matrix"
 
+This is accomplished with a simple `pairs()` call in the book. We need to use `ggpairs()` from the "GGally" package to replicate the same in ggplot2.
+
 ```{r}
-nested_re %>% 
+scatterplot_re <- random_effects %>% 
   select(-condsd) %>% 
   spread(term, condval, convert = TRUE) %>% 
-  pairs(~ `(Intercept)` + pactotal + partyRepublican, 
-                         data = .)
+  GGally::ggpairs(columns = c("(Intercept)", "pactotal", "partyRepublican")) + 
+  theme_bw()
+
+scatterplot_re
 ```
 
+# Table 2.11
+
+Luke here actually computes combined parameter estimates of the Intercept, pactotal (Money), and party by state *incorporating* the true state acreage value and the interaction term with acreage with the latter two variables.
+
+The described "Empirical Bayes" estimates are obtained via `coef()` in lme4. These go by various different terms, such as best linear unbiased estimators (BLUE) or predictor (BLUP), conditional mode of parameters by Doug Bates; in the text, Luke also refers to them as "shrinkage estimates". 
+
+We adjust these BLUEs with the fixed effects estimates for interaction terms and acreage of the state.
+
+```{r}
+# Prepare the data
+state_data <- tobacco %>% 
+  group_by(state) %>% 
+  summarise(acres = first(acres),
+            legislators = n())
+
+# Best Linear Unbiased Estimates
+fixed_effects <- fixef(model3_fit)
+blues <- coef(model3_fit)$state
+# Change "(Intercept)" to "Intercept" for convenience
+colnames(blues)[1] <- names(fixed_effects)[1] <- "Intercept"
+
+# Custom function to create the EB estimates
+adj_est <-  function(a){
+  term <- ifelse(a == "Intercept", "acres", paste(a, ":acres", sep = ""))
+  blues[[a]] + (state_data[["acres"]] * fixed_effects[[term]])
+}
+
+# Calculate EB estimates
+eb_estimates <- blues %>% 
+  transmute(State = state_data[["state"]],
+            Legislators = state_data[["legislators"]],
+            Intercept = adj_est("Intercept"),
+            Party = adj_est("partyRepublican"),
+            Money = adj_est("pactotal"),
+            Acres = state_data[["acres"]])
+
+eb_estimates
+```
+
+## Figure 2.11 "Bayesian Estimated Regression Lines for Model 3 by Party"
+
+I plot this by calculating the estimated vote with no money (minimum), and the estimated vote with $120k worth of PAC money (maximum). These form the limits on the y axis of each regression line by state and party. I then use `geom_segment` to link these.
+
+```{r}
+eb_predictions <- eb_estimates %>% 
+  transmute(Dmin = Intercept + Money,
+            Dmax = Intercept + (Money * 120),
+            Rmin = Intercept + Party + Money,
+            Rmax = Intercept + Party + (Money * 120),
+            state = state_data[["state"]])
+
+eb_party_plot <- eb_predictions %>% ggplot() + 
+  geom_segment(aes(x = 0, xend = 120, y = Dmin, yend = Dmax), linetype = "solid") +
+  geom_segment(aes(x = 0, xend = 120, y = Rmin, yend = Rmax), linetype = "longdash") +
+  theme_minimal() +
+  coord_cartesian(ylim = c(0,.96), xlim = c(5, 115)) +
+  labs(y = "Predicted Pro-Tobacco Voting (%)",
+       x = "PAC Contributions ($K)")
+
+eb_party_plot
+```
+
+# Figure 2.12
+
+Something interesting is happening here. The text states that this is a plot where "party is ignored". The trouble is that the EB estimates we have will give different intercepts and slopes depending upon the party. If we arbitrarily choose one, we bias the plot. If we take the mean across parties, we bias again because some states lean Republican, or Democrat. 
+
+The solution here is to calculated a weighted mean of the EB estimates by the proportion of Republican legislators. This is done by calculating the ratio of R/D for each state, then using these as weights to average the minimum and maximum predicted values calculated above for each state, using a call to `sapply`.
+
+```{r}
+# Find ratio of Democrat to Republicans
+party_ratio <- tobacco %>% 
+  group_by(state, party) %>% 
+  summarise(legislators = n()) %>% 
+  mutate(Pct_Republican = legislators / sum(legislators)) %>% 
+  complete(party, fill = list(Pct_Republican = 0)) %>% 
+  ungroup() %>% select(-legislators) %>% 
+  spread(key = party, value = Pct_Republican)
+
+# Custom function to find weighted EB estimates
+eb_weighted <- function(D, R){
+  sapply(1:50, function(x){
+    weighted.mean(x = c(eb_predictions[[D]][x], eb_predictions[[R]][x]), 
+                  w = c(party_ratio[["Democrat"]][x], party_ratio[["Republican"]][x]))
+  })
+}
+eb_by_state <- data.frame(state = state_data[["state"]],
+                          Avgmin = eb_weighted("Dmin", "Rmin"),
+                          Avgmax = eb_weighted("Dmax", "Rmax"))
+
+# Now plot
+eb_state_plot <- tobacco %>% 
+  ggplot(aes(x = pactotal, y = VotePct)) + 
+  geom_point(shape = 1, size = 2, alpha = .8) + 
+  coord_cartesian(ylim = c(0,1), xlim = c(0, 100)) +
+  facet_wrap( ~ state) +
+  geom_segment(data = eb_by_state, 
+               aes(x = 0, xend = 120, 
+                   y = Avgmin, 
+                   yend = Avgmax)) +
+  theme_bw() + 
+  theme(panel.spacing = unit(0, "lines"), 
+        panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  labs(y = "Vote %", x = "PAC Money")
+
+eb_state_plot
+```
+
+Results look fairly close to the published plot.
+
+# Table 2.12
+
+```{r}
+mean_pac <- mean(tobacco$pactotal)
+tobacco <- tobacco %>% 
+  group_by(state) %>% 
+  mutate(pactotal_gc = pactotal - mean_pac,
+         pactotal_sc = pactotal - mean(pactotal))
+
+model3_gc <- lmer(VotePct ~ 1 + pactotal_gc + party + acres + pactotal_gc*acres + party*acres + (pactotal_gc + party | state), 
+                   data = tobacco, REML = F)
+model3_sc <- lmer(VotePct ~ 1 + pactotal_sc + party + acres + pactotal_sc*acres + party*acres + (pactotal_sc + party | state), 
+                   data = tobacco, REML = F)
+summary(model3_gc)
+```
+
+# Table 3.2
+
+```{r}
+tobacco_votes <- tobvote %>% 
+  select(lastname, firstnam, state, house, pactotal, party, votedpro, votenum, acres) %>% #extract variables of interest
+  mutate(vote = (as.numeric(votedpro)-1)) %>% 
+  group_by(state) %>% 
+  mutate(legislator = paste(firstnam, lastname))
+
+model4_fit <- glmer(vote ~ 1 + pactotal + party + (1 | legislator), 
+                   data = tobacco_votes, 
+                   family = binomial)
+
+summary(model4_fit)
+```
