@@ -248,7 +248,7 @@ scatterplot_re
 
 Luke here actually computes combined parameter estimates of the Intercept, pactotal (Money), and party by state *incorporating* the true state acreage value and the interaction term with acreage with the latter two variables.
 
-The described "Empirical Bayes" estimates are obtained via `coef()` in lme4. These go by various different terms, such as best linear unbiased estimators (BLUE) or predictor (BLUP), conditional mode of parameters by Doug Bates; in the text, Luke also refers to them as "shrinkage estimates". 
+The described "Empirical Bayes" estimates are obtained via `coef()` in lme4. These go by various different terms, such as best linear unbiased estimators (BLUEs) or predictors (BLUPs), conditional mode of parameters by Doug Bates; in the text, Luke also refers to them as "shrinkage estimates". 
 
 We adjust these BLUEs with the fixed effects estimates for interaction terms and acreage of the state.
 
@@ -378,9 +378,85 @@ tobacco_votes <- tobvote %>%
   group_by(state) %>% 
   mutate(legislator = paste(firstnam, lastname))
 
-model4_fit <- glmer(vote ~ 1 + pactotal + party + (1 | legislator), 
+model4_fit <- glmer(vote ~ 1 + party + pactotal + (1 | legislator), 
                    data = tobacco_votes, 
                    family = binomial)
 
 summary(model4_fit)
+```
+
+We also need the dispersion index
+
+```{r}
+# This code is nicked from the blmeco package
+dispersion_glmer <- function(modelglmer){
+  # computing  estimated scale  ( binomial model) following  D. Bates :
+  # That quantity is the square root of the penalized residual sum of
+  # squares divided by n, the number of observations, evaluated as:
+  n <- length(resid(modelglmer))
+  return(  sqrt( sum(c(resid(modelglmer),modelglmer@u) ^2) / n ) ) 
+} 
+
+dispersion_glmer(model4_fit)
+```
+
+# Figure 3.2
+
+For ease of plotting, I'll use the `emmeans` package. This also helpfully provides the confidence bands, improving upon the original.
+
+```{r}
+library(emmeans)
+glmer_predicted <- emmeans(model4_fit, c("party", "pactotal"), 
+                           at = list(party = c("Republican", "Democrat"), 
+                                     pactotal = 1:120),
+                           type = "response") %>% as.data.frame()
+
+glmer_predicted %>% 
+  ggplot(aes(y = prob, x = pactotal, group = party)) +
+  geom_line(aes(linetype = party)) +
+  geom_ribbon(aes(ymin = asymp.LCL, ymax = asymp.UCL), alpha = .05) +
+  lims(y = c(0, 1)) +
+  labs(x = "Pac Contributions ($K)",
+       y = "Predicted Pro-Tobacco Voting Probabilities") +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        legend.position = c(0.9, 0.15),
+        legend.title = element_blank())
+```
+
+# Table 3.3
+
+This may take several minutes, depending upon the speed of your computer.
+
+```{r}
+model5_fit <- glmer(vote ~ 1 + party + pactotal + acres + (party + pactotal | legislator) + (1 | state), 
+                   data = tobacco_votes, 
+                   family = binomial)
+
+summary(model5_fit)
+```
+
+# Figure 3.3
+
+Same general procedure as above
+
+```{r}
+glmer2_predicted <- emmeans(model5_fit, c("party", "pactotal", "acres"), 
+                           at = list(party = c("Republican", "Democrat"), 
+                                     pactotal = 1:120,
+                                     acres = c(0, 10, 100)),
+                           type = "response") %>% as.data.frame()
+
+glmer2_predicted %>% 
+  unite("party_acres", party, acres) %>% 
+  ggplot(aes(y = prob, x = pactotal, group = party_acres)) +
+  geom_line(aes(linetype = party_acres)) +
+  geom_ribbon(aes(ymin = asymp.LCL, ymax = asymp.UCL), alpha = .05) +
+  lims(y = c(0, 1)) +
+  labs(x = "Pac Contributions ($K)",
+       y = "Predicted Pro-Tobacco Voting Probabilities") +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        legend.position = c(0.85, 0.25),
+        legend.title = element_blank())
 ```
